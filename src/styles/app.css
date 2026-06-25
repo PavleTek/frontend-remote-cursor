@@ -1783,3 +1783,170 @@ body {
   0%, 100% { opacity: 1; }
   50%       { opacity: 0; }
 }
+
+/* ── Plan card: Reject button ────────────────────────────────────────────────── */
+
+.plan-card-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.btn-reject {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 18px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--error) 30%, transparent);
+  border-radius: 10px;
+  transition: background 0.15s, border-color 0.15s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.btn-reject:not(:disabled):hover {
+  background: color-mix(in srgb, var(--error) 20%, transparent);
+}
+
+.btn-reject:disabled {
+  opacity: 0.45;
+}
+
+/* ── Question card ───────────────────────────────────────────────────────────── */
+
+.question-card {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--success);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.question-card--answered {
+  opacity: 0.75;
+}
+
+.question-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.question-badge {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 15%, transparent);
+  padding: 3px 8px;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+
+.question-title {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.question-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.question-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.question-prompt {
+  font-size: 0.9rem;
+  color: var(--text);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.question-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.question-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  font-size: 0.88rem;
+  color: var(--text-muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  text-align: left;
+  transition: border-color 0.12s, background 0.12s, color 0.12s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.question-option:not(:disabled):hover {
+  border-color: var(--success);
+  color: var(--text);
+}
+
+.question-option.selected {
+  border-color: var(--success);
+  background: color-mix(in srgb, var(--success) 12%, var(--surface));
+  color: var(--text);
+}
+
+.question-option.locked {
+  pointer-events: none;
+}
+
+.question-option-check {
+  flex-shrink: 0;
+  font-size: 0.9rem;
+  color: var(--success);
+  width: 14px;
+  text-align: center;
+}
+
+.btn-question-submit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 18px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #fff;
+  background: var(--success);
+  border: none;
+  border-radius: 10px;
+  align-self: flex-start;
+  transition: background 0.15s, opacity 0.15s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.btn-question-submit:not(:disabled):hover {
+  background: color-mix(in srgb, var(--success) 85%, white);
+}
+
+.btn-question-submit:disabled {
+  opacity: 0.45;
+}
+
+.question-answered-label {
+  font-size: 0.82rem;
+  color: var(--success);
+  font-weight: 500;
+}

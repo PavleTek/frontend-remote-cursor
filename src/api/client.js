@@ -115,7 +115,7 @@ export async function sendPrompt(payload) {
 
 /**
  * Stream a prompt via SSE (POST /api/prompt/stream).
- * handlers: { onSession, onText, onPlan, onTodos, onDone, onError }
+ * handlers: { onTurn, onSession, onText, onPlan, onTodos, onQuestion, onDone, onError }
  * Returns an AbortController — call .abort() to cancel.
  */
 export function streamPrompt(payload, handlers = {}) {
@@ -185,12 +185,14 @@ export function streamPrompt(payload, handlers = {}) {
           }
 
           switch (eventName) {
-            case "session": handlers.onSession?.(parsed); break;
-            case "text":    handlers.onText?.(parsed); break;
-            case "plan":    handlers.onPlan?.(parsed); break;
-            case "todos":   handlers.onTodos?.(parsed); break;
-            case "done":    handlers.onDone?.(parsed); break;
-            case "error":   handlers.onError?.(new Error(parsed.error ?? "Stream error")); break;
+            case "turn":     handlers.onTurn?.(parsed); break;
+            case "session":  handlers.onSession?.(parsed); break;
+            case "text":     handlers.onText?.(parsed); break;
+            case "plan":     handlers.onPlan?.(parsed); break;
+            case "todos":    handlers.onTodos?.(parsed); break;
+            case "question": handlers.onQuestion?.(parsed); break;
+            case "done":     handlers.onDone?.(parsed); break;
+            case "error":    handlers.onError?.(new Error(parsed.error ?? "Stream error")); break;
           }
         }
       }
@@ -226,4 +228,38 @@ export async function getChats({ workspace, q } = {}) {
 export async function getChat(id, workspace) {
   const params = new URLSearchParams({ workspace });
   return apiRequest(`/api/chats/${encodeURIComponent(id)}?${params.toString()}`);
+}
+
+// ── ACP reply helpers ─────────────────────────────────────────────────────────
+
+/**
+ * Submit answers to a pending cursor/ask_question blocking request.
+ * answers: [{ questionId, selectedOptionIds[] }]
+ */
+export async function respondToQuestion({ turnId, requestId, answers }) {
+  return apiRequest("/api/acp/respond", {
+    method: "POST",
+    body: JSON.stringify({ turnId, requestId, answers }),
+  });
+}
+
+/**
+ * Accept or reject a pending cursor/create_plan blocking request.
+ * decision: "accepted" | "rejected"
+ */
+export async function respondToPlan({ turnId, requestId, decision, reason }) {
+  return apiRequest("/api/acp/plan-decision", {
+    method: "POST",
+    body: JSON.stringify({ turnId, requestId, decision, reason }),
+  });
+}
+
+/**
+ * Cancel an active turn and terminate its agent subprocess.
+ */
+export async function cancelTurn(turnId) {
+  return apiRequest("/api/acp/cancel", {
+    method: "POST",
+    body: JSON.stringify({ turnId }),
+  });
 }

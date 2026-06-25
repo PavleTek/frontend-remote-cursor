@@ -5,9 +5,12 @@ import {
   getBackendUrl,
   getChat,
   getFavoriteModels,
+  respondToQuestion,
+  respondToPlan,
   streamPrompt,
 } from "../api/client.js";
 import PlanView from "../components/PlanView.jsx";
+import QuestionCard from "../components/QuestionCard.jsx";
 import AgentWorkingBar from "../components/AgentWorkingBar.jsx";
 import {
   getMode,
@@ -105,10 +108,12 @@ function formatWorkspaceDisplay(label, slug) {
 
 /**
  * Message shapes:
- *   { id, role:"user",      type:"text",    content:string }
- *   { id, role:"assistant", type:"text",    content:string, streaming?:true }
- *   { id, role:"assistant", type:"plan",    plan:{name,overview,plan,todos[]},
- *                                           executing:bool, executed:bool }
+ *   { id, role:"user",      type:"text",     content:string }
+ *   { id, role:"assistant", type:"text",     content:string, streaming?:true }
+ *   { id, role:"assistant", type:"plan",     plan:{name,overview,plan,todos[]},
+ *                                            requestId:string|null, executing:bool, executed:bool }
+ *   { id, role:"assistant", type:"question", requestId:string, title:string|null,
+ *                                            questions:[], answered:bool }
  */
 
 function getModeIcon(modeId) {
@@ -146,15 +151,28 @@ function getWaitingLabel(modeId) {
   return "Working…";
 }
 
-function MessageBubble({ msg, onExecutePlan, waitingLabel }) {
+function MessageBubble({ msg, onExecutePlan, onRejectPlan, onAnswerQuestion, waitingLabel }) {
   if (msg.type === "plan") {
     return (
       <div className="message message-assistant">
         <PlanView
           plan={msg.plan}
+          requestId={msg.requestId ?? null}
           executing={msg.executing}
           executed={msg.executed}
           onExecute={() => onExecutePlan(msg.id)}
+          onReject={() => onRejectPlan(msg.id)}
+        />
+      </div>
+    );
+  }
+
+  if (msg.type === "question") {
+    return (
+      <div className="message message-assistant">
+        <QuestionCard
+          question={msg}
+          onSubmit={(answers) => onAnswerQuestion(msg.id, answers)}
         />
       </div>
     );
@@ -239,6 +257,10 @@ export default function Chat() {
   useEffect(() => { chatIdRef.current = chatId; }, [chatId]);
   // Abort controller for the active stream
   const streamControllerRef = useRef(null);
+  // ACP turn id for the currently active stream (used to address reply endpoints)
+  const turnIdRef = useRef(null);
+  // Plan msg id being executed in the current ACP turn (for execute-via-respond flow)
+  const executingPlanMsgIdRef = useRef(null);
 
   const [modeDropdownOpen, setModeDropdownOpen] = useState(false);
   const modeRef = useRef(null);
@@ -524,6 +546,10 @@ export default function Chat() {
    */
   const runStream = useCallback(
     (text, streamMode, streamChatId, streamWorkspace, planMsgId = null) => {
+      // Reset ACP turn tracking for this new stream
+      turnIdRef.current = null;
+      executingPlanMsgIdRef.current = null;
+
       // Add live text bubble for streaming agent output
       const textMsgId = crypto.randomUUID();
       setMessages((prev) => [
@@ -544,6 +570,10 @@ export default function Chat() {
           workspaceSlug: streamWorkspace || undefined,
         },
         {
+          onTurn({ turnId }) {
+            turnIdRef.current = turnId;
+          },
+
           onSession({ chatId: returnedId }) {
             // The init event contains the canonical chat id (useful when chatId was null)
             if (returnedId && returnedId !== chatIdRef.current) {
@@ -567,7 +597,8 @@ export default function Chat() {
           },
 
           onPlan(planData) {
-            // Replace the streaming text bubble with the plan card
+            // Replace the streaming text bubble with the plan card.
+            // requestId is present when the agent is blocking on cursor/create_plan.
             setMessages((prev) => {
               const withoutText = prev.filter((m) => m.id !== textMsgId);
               const newPlanMsg = {
@@ -584,6 +615,7 @@ export default function Chat() {
                     status: t.status ?? "pending",
                   })),
                 },
+                requestId: planData.requestId ?? null,
                 executing: false,
                 executed: false,
               };
@@ -591,8 +623,27 @@ export default function Chat() {
             });
           },
 
+          onQuestion({ requestId, title, questions }) {
+            // Remove the empty streaming bubble; insert a question card instead.
+            setMessages((prev) => {
+              const withoutText = prev.filter((m) => m.id !== textMsgId);
+              return [
+                ...withoutText,
+                {
+                  id: crypto.randomUUID(),
+                  role: "assistant",
+                  type: "question",
+                  requestId,
+                  title: title ?? null,
+                  questions: questions ?? [],
+                  answered: false,
+                },
+              ];
+            });
+          },
+
           onTodos({ todos: updatedTodos }) {
-            // Merge todo statuses into the most recent plan card
+            // Merge todo statuses into any plan cards
             setMessages((prev) => {
               const statusMap = new Map(updatedTodos.map((t) => [t.id, t.status]));
               return prev.map((m) => {
@@ -612,13 +663,25 @@ export default function Chat() {
           },
 
           onDone() {
-            // Remove streaming state from live text bubble (if still present)
+            // Remove streaming state from the live text bubble (if still present)
             setMessages((prev) =>
               prev.map((m) =>
                 m.id === textMsgId ? { ...m, streaming: false } : m,
               ),
             );
-            // Mark plan as executed-done if this was an agent execute run
+            // Mark plan as executed if this was an ACP in-place execute
+            const acpPlanId = executingPlanMsgIdRef.current;
+            if (acpPlanId) {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === acpPlanId && m.type === "plan"
+                    ? { ...m, executing: false, executed: true }
+                    : m,
+                ),
+              );
+              executingPlanMsgIdRef.current = null;
+            }
+            // Also handle the legacy new-prompt execute path
             if (planMsgId) {
               setMessages((prev) =>
                 prev.map((m) =>
@@ -652,6 +715,17 @@ export default function Chat() {
                 ),
               );
             }
+            const acpPlanId = executingPlanMsgIdRef.current;
+            if (acpPlanId) {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === acpPlanId && m.type === "plan"
+                    ? { ...m, executing: false }
+                    : m,
+                ),
+              );
+              executingPlanMsgIdRef.current = null;
+            }
             setError(err.message || "Stream error");
             setSending(false);
             textareaRef.current?.focus();
@@ -680,27 +754,92 @@ export default function Chat() {
     (planMsgId) => {
       if (sending) return;
 
-      // Mark the plan card as executing
+      const planMsg = messages.find((m) => m.id === planMsgId && m.type === "plan");
+
+      if (planMsg?.requestId && turnIdRef.current) {
+        // ACP path: the agent is blocking on cursor/create_plan — respond "accepted"
+        // so it continues in the same live stream; no new runStream needed.
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === planMsgId && m.type === "plan" ? { ...m, executing: true } : m,
+          ),
+        );
+        executingPlanMsgIdRef.current = planMsgId;
+
+        respondToPlan({
+          turnId: turnIdRef.current,
+          requestId: planMsg.requestId,
+          decision: "accepted",
+        }).catch((err) => {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === planMsgId && m.type === "plan" ? { ...m, executing: false } : m,
+            ),
+          );
+          executingPlanMsgIdRef.current = null;
+          setError(err.message || "Failed to execute plan");
+        });
+      } else {
+        // Fallback: start a new agent stream with the execute prompt
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === planMsgId && m.type === "plan" ? { ...m, executing: true } : m,
+          ),
+        );
+
+        const executePrompt =
+          "Execute the approved plan. Implement every todo step in order and report progress as you go.";
+        const userMessage = {
+          id: crypto.randomUUID(),
+          role: "user",
+          type: "text",
+          content: executePrompt,
+        };
+        setMessages((prev) => [...prev, userMessage]);
+        runStream(executePrompt, "agent", chatIdRef.current, chatWorkspace, planMsgId);
+      }
+    },
+    [sending, messages, chatWorkspace, runStream],
+  );
+
+  /** Called when the user taps "Reject" inside a PlanView with an ACP requestId */
+  const handleRejectPlan = useCallback(
+    (planMsgId) => {
+      const planMsg = messages.find((m) => m.id === planMsgId && m.type === "plan");
+      if (!planMsg?.requestId || !turnIdRef.current) return;
+
+      respondToPlan({
+        turnId: turnIdRef.current,
+        requestId: planMsg.requestId,
+        decision: "rejected",
+        reason: "User rejected the plan",
+      }).catch((err) => {
+        setError(err.message || "Failed to reject plan");
+      });
+    },
+    [messages],
+  );
+
+  /** Called when the user submits answers inside a QuestionCard */
+  const handleAnswerQuestion = useCallback(
+    (msgId, answers) => {
+      const msg = messages.find((m) => m.id === msgId && m.type === "question");
+      if (!msg || msg.answered || !turnIdRef.current) return;
+
+      // Mark answered immediately so the card locks
       setMessages((prev) =>
-        prev.map((m) =>
-          m.id === planMsgId && m.type === "plan" ? { ...m, executing: true } : m,
-        ),
+        prev.map((m) => (m.id === msgId ? { ...m, answered: true } : m)),
       );
 
-      const executePrompt =
-        "Execute the approved plan. Implement every todo step in order and report progress as you go.";
-
-      const userMessage = {
-        id: crypto.randomUUID(),
-        role: "user",
-        type: "text",
-        content: executePrompt,
-      };
-      setMessages((prev) => [...prev, userMessage]);
-
-      runStream(executePrompt, "agent", chatIdRef.current, chatWorkspace, planMsgId);
+      respondToQuestion({
+        turnId: turnIdRef.current,
+        requestId: msg.requestId,
+        answers,
+      }).catch((err) => {
+        setError(err.message || "Failed to submit answer");
+      });
     },
-    [sending, chatWorkspace, runStream],
+    [messages],
   );
 
 
@@ -871,6 +1010,8 @@ export default function Chat() {
             key={msg.id}
             msg={msg}
             onExecutePlan={handleExecutePlan}
+            onRejectPlan={handleRejectPlan}
+            onAnswerQuestion={handleAnswerQuestion}
             waitingLabel={waitingLabel}
           />
         ))}

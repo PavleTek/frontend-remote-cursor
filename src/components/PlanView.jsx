@@ -27,21 +27,24 @@ function TodoItem({ todo }) {
 
 /**
  * Renders a structured plan card with name, overview, markdown body, todo list,
- * and an Execute Plan button.
+ * and Execute / Reject buttons.
  *
  * Props:
  *   plan      – { name, overview, plan (markdown), todos[] }
+ *   requestId – string | null   ACP blocking request id; present when agent is waiting
  *   executing – bool: is execute currently running?
  *   executed  – bool: has execute already finished?
  *   onExecute – () => void
+ *   onReject  – () => void
  */
-export default function PlanView({ plan, executing, executed, onExecute }) {
+export default function PlanView({ plan, requestId, executing, executed, onExecute, onReject }) {
   if (!plan) return null;
 
   const { name, overview, plan: markdown, todos = [] } = plan;
 
   const doneCount = todos.filter((t) => t.status === "completed").length;
   const hasProgress = todos.some((t) => t.status !== "pending");
+  const isBlocking = Boolean(requestId);
 
   return (
     <div className="plan-card">
@@ -76,22 +79,35 @@ export default function PlanView({ plan, executing, executed, onExecute }) {
       )}
 
       {!executed && (
-        <button
-          type="button"
-          className={`btn btn-execute${executing ? " executing" : ""}`}
-          onClick={onExecute}
-          disabled={executing}
-          style={{ cursor: executing ? "default" : "pointer" }}
-        >
-          {executing ? (
-            <>
-              <span className="dot-pulse" aria-hidden="true" />
-              Executing…
-            </>
-          ) : (
-            "Execute Plan"
+        <div className="plan-card-actions">
+          <button
+            type="button"
+            className={`btn btn-execute${executing ? " executing" : ""}`}
+            onClick={onExecute}
+            disabled={executing}
+            style={{ cursor: executing ? "default" : "pointer" }}
+          >
+            {executing ? (
+              <>
+                <span className="dot-pulse" aria-hidden="true" />
+                Executing…
+              </>
+            ) : (
+              "Execute Plan"
+            )}
+          </button>
+
+          {isBlocking && !executing && (
+            <button
+              type="button"
+              className="btn btn-reject"
+              onClick={onReject}
+              style={{ cursor: "pointer" }}
+            >
+              Reject
+            </button>
           )}
-        </button>
+        </div>
       )}
 
       {executed && doneCount === todos.length && todos.length > 0 && (
