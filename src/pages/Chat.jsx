@@ -9,6 +9,7 @@ import {
   streamPrompt,
 } from "../api/client.js";
 import PlanView from "../components/PlanView.jsx";
+import AgentWorkingBar from "../components/AgentWorkingBar.jsx";
 import {
   getMode,
   getModel,
@@ -56,7 +57,13 @@ function saveChatWsLabel(label) {
  *                                           executing:bool, executed:bool }
  */
 
-function MessageBubble({ msg, onExecutePlan }) {
+function getWaitingLabel(modeId) {
+  if (modeId === "ask") return "Thinking…";
+  if (modeId === "plan") return "Planning…";
+  return "Working…";
+}
+
+function MessageBubble({ msg, onExecutePlan, waitingLabel }) {
   if (msg.type === "plan") {
     return (
       <div className="message message-assistant">
@@ -74,10 +81,17 @@ function MessageBubble({ msg, onExecutePlan }) {
   return (
     <div className={`message message-${msg.role}`}>
       <span className="message-label">{msg.role === "user" ? "You" : "Agent"}</span>
-      <div className={`message-body${msg.streaming ? " streaming" : ""}`}>
-        {msg.content}
-        {msg.streaming && <span className="stream-caret" aria-hidden="true" />}
-      </div>
+      {msg.streaming && !msg.content ? (
+        <div className="message-body thinking">
+          <span className="dot-pulse" aria-hidden="true" />
+          {waitingLabel}
+        </div>
+      ) : (
+        <div className={`message-body${msg.streaming ? " streaming" : ""}`}>
+          {msg.content}
+          {msg.streaming && <span className="stream-caret" aria-hidden="true" />}
+        </div>
+      )}
     </div>
   );
 }
@@ -107,6 +121,9 @@ export default function Chat() {
   const [loadingTranscript, setLoadingTranscript] = useState(false);
   const [sending, setSending] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [activeStreamMode, setActiveStreamMode] = useState(null);
+  const [streamStartedAt, setStreamStartedAt] = useState(null);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [error, setError] = useState(null);
   const [noBackend, setNoBackend] = useState(false);
   const [noFavorites, setNoFavorites] = useState(false);
@@ -126,6 +143,25 @@ export default function Chat() {
   useEffect(() => {
     scrollToBottom();
   }, [messages, sending, scrollToBottom]);
+
+  useEffect(() => {
+    if (sending) {
+      setStreamStartedAt(Date.now());
+      setElapsedSeconds(0);
+    } else {
+      setStreamStartedAt(null);
+      setElapsedSeconds(0);
+      setActiveStreamMode(null);
+    }
+  }, [sending]);
+
+  useEffect(() => {
+    if (!sending || !streamStartedAt) return undefined;
+    const id = setInterval(() => {
+      setElapsedSeconds(Math.floor((Date.now() - streamStartedAt) / 1000));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [sending, streamStartedAt]);
 
   // Load favorite models + workspace list on mount
   useEffect(() => {
@@ -429,6 +465,7 @@ export default function Chat() {
       ]);
 
       setSending(true);
+      setActiveStreamMode(streamMode);
       setError(null);
 
       const controller = streamPrompt(
@@ -608,15 +645,33 @@ export default function Chat() {
 
   const modeLabel = MODES.find((m) => m.id === mode)?.label ?? "Agent";
   const isResuming = Boolean(paramId && paramWs);
-  const busy = sending || initializing || loadingTranscript;
+  const busy = sending || initializing || loadingTranscript || refreshing;
   const displayLabel = chatWorkspaceLabel || chatWorkspace;
-  const canRefresh = Boolean(chatIdRef.current && chatWorkspace && !busy && !refreshing && !noBackend);
+  const canRefresh = Boolean(chatIdRef.current && chatWorkspace && !busy && !noBackend);
+
+  const streamingBubble = messages.find((m) => m.type === "text" && m.streaming);
+  const planExecuting = messages.some((m) => m.type === "plan" && m.executing);
+  const streamModeForLabel = activeStreamMode ?? mode;
+
+  let workingLabel;
+  let showWorkingTimer = false;
+  if (planExecuting) {
+    workingLabel = "Executing plan…";
+    showWorkingTimer = true;
+  } else if (streamingBubble && !streamingBubble.content) {
+    workingLabel = getWaitingLabel(streamModeForLabel);
+  } else {
+    workingLabel = "Agent is working…";
+    showWorkingTimer = true;
+  }
+
+  const waitingLabel = getWaitingLabel(streamModeForLabel);
 
   let subtitle;
   if (loadingTranscript) subtitle = "Loading transcript…";
   else if (initializing) subtitle = "Starting session…";
   else if (refreshing) subtitle = "Refreshing…";
-  else if (sending) subtitle = `${modeLabel} · streaming…`;
+  else if (sending) subtitle = `${modeLabel} · ${workingLabel}`;
   else if (chatId) subtitle = isResuming ? `${modeLabel} · resumed` : `${modeLabel} · ready`;
   else subtitle = "Offline";
 
@@ -655,6 +710,14 @@ export default function Chat() {
           </button>
         </div>
       </header>
+
+      {sending && (
+        <AgentWorkingBar
+          label={workingLabel}
+          elapsedSeconds={elapsedSeconds}
+          showTimer={showWorkingTimer}
+        />
+      )}
 
       {isResuming && (
         <div className="chat-resume-bar">
@@ -757,7 +820,12 @@ export default function Chat() {
         )}
 
         {messages.map((msg) => (
-          <MessageBubble key={msg.id} msg={msg} onExecutePlan={handleExecutePlan} />
+          <MessageBubble
+            key={msg.id}
+            msg={msg}
+            onExecutePlan={handleExecutePlan}
+            waitingLabel={waitingLabel}
+          />
         ))}
 
         <div ref={messagesEndRef} />
@@ -776,7 +844,7 @@ export default function Chat() {
         />
         <button
           type="button"
-          className="btn btn-send"
+          className={`btn btn-send${busy ? " working" : ""}`}
           onClick={handleSend}
           disabled={
             !prompt.trim() ||
@@ -785,10 +853,17 @@ export default function Chat() {
             !chatId ||
             noFavorites
           }
-          aria-label="Send prompt"
-          style={{ cursor: "pointer" }}
+          aria-label={busy ? "Agent working" : "Send prompt"}
+          style={{ cursor: busy || !prompt.trim() || noBackend || !chatId || noFavorites ? "default" : "pointer" }}
         >
-          Send
+          {busy ? (
+            <>
+              <span className="dot-pulse" aria-hidden="true" />
+              Working…
+            </>
+          ) : (
+            "Send"
+          )}
         </button>
       </div>
     </div>

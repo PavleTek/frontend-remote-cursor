@@ -727,6 +727,77 @@ body {
   background: var(--accent-hover);
 }
 
+.btn-send.working {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  opacity: 0.85;
+  cursor: default;
+}
+
+.btn-send:disabled {
+  cursor: default;
+}
+
+/* Agent working banner — shown while SSE stream is active */
+.agent-working-bar {
+  position: relative;
+  flex-shrink: 0;
+  overflow: hidden;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+}
+
+.agent-working-bar__inner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px calc(16px + var(--safe-right)) 10px calc(16px + var(--safe-left));
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #c8c0ff;
+}
+
+.agent-working-bar__label {
+  flex: 1;
+  min-width: 0;
+}
+
+.agent-working-bar__timer {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.agent-working-bar__shimmer {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--accent) 18%, transparent) 50%,
+    transparent 100%
+  );
+  animation: working-shimmer 2.4s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes working-shimmer {
+  0% {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+  40% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+}
+
 .inline-link {
   color: var(--accent);
   font-weight: 600;
