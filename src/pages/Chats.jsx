@@ -95,20 +95,25 @@ export default function Chats() {
             </p>
           )}
         </div>
-        {workspaceFilter && (
-          <button
-            type="button"
-            className="btn btn-ghost btn-new-chat"
-            onClick={() =>
+        <button
+          type="button"
+          className="btn btn-ghost btn-new-chat"
+          onClick={() => {
+            if (workspaceFilter) {
               navigate(`/chat?workspace=${encodeURIComponent(workspaceFilter)}`, {
-                state: { workspaceLabel: chats[0]?.workspaceLabel || workspaceFilter },
-              })
+                state: { 
+                  workspaceLabel: chats[0]?.workspaceLabel || workspaceFilter,
+                  forceNew: true 
+                },
+              });
+            } else {
+              navigate("/chat", { state: { forceNew: true } });
             }
-            style={{ cursor: "pointer" }}
-          >
-            + New chat
-          </button>
-        )}
+          }}
+          style={{ cursor: "pointer" }}
+        >
+          + New chat
+        </button>
       </header>
 
       <div className="search-bar">

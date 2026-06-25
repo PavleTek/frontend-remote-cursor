@@ -5,7 +5,6 @@ import {
   getBackendUrl,
   getChat,
   getFavoriteModels,
-  getWorkspaces,
   streamPrompt,
 } from "../api/client.js";
 import PlanView from "../components/PlanView.jsx";
@@ -57,6 +56,35 @@ function saveChatWsLabel(label) {
  *                                           executing:bool, executed:bool }
  */
 
+function getModeIcon(modeId) {
+  if (modeId === "ask") {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+      </svg>
+    );
+  }
+  if (modeId === "plan") {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+        <line x1="9" y1="9" x2="15" y2="9" />
+        <line x1="9" y1="13" x2="15" y2="13" />
+        <line x1="9" y1="17" x2="15" y2="17" />
+      </svg>
+    );
+  }
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+      <path d="M12 2v4" />
+      <path d="M8 5h8" />
+      <circle cx="8" cy="16" r="1" />
+      <circle cx="16" cy="16" r="1" />
+    </svg>
+  );
+}
+
 function getWaitingLabel(modeId) {
   if (modeId === "ask") return "Thinking…";
   if (modeId === "plan") return "Planning…";
@@ -67,7 +95,6 @@ function MessageBubble({ msg, onExecutePlan, waitingLabel }) {
   if (msg.type === "plan") {
     return (
       <div className="message message-assistant">
-        <span className="message-label">Agent</span>
         <PlanView
           plan={msg.plan}
           executing={msg.executing}
@@ -80,7 +107,6 @@ function MessageBubble({ msg, onExecutePlan, waitingLabel }) {
 
   return (
     <div className={`message message-${msg.role}`}>
-      <span className="message-label">{msg.role === "user" ? "You" : "Agent"}</span>
       {msg.streaming && !msg.content ? (
         <div className="message-body thinking">
           <span className="dot-pulse" aria-hidden="true" />
@@ -107,15 +133,38 @@ export default function Chat() {
 
   const [messages, setMessages] = useState([]);
   const [prompt, setPrompt] = useState("");
-  const [chatId, setChatId] = useState(() => paramId || loadChatId());
-  const [chatWorkspace, setChatWorkspace] = useState(() => paramWs || loadChatWs());
-  const [chatWorkspaceLabel, setChatWorkspaceLabel] = useState(
-    () => stateLabel || loadChatWsLabel(),
-  );
+  const [chatId, setChatId] = useState(() => {
+    if (location.state?.forceNew) {
+      sessionStorage.removeItem(CHAT_ID_KEY);
+      return null;
+    }
+    return paramId || loadChatId();
+  });
+  const [chatWorkspace, setChatWorkspace] = useState(() => {
+    if (location.state?.forceNew) {
+      if (paramWs) {
+        sessionStorage.setItem(CHAT_WS_KEY, paramWs);
+        return paramWs;
+      }
+      sessionStorage.removeItem(CHAT_WS_KEY);
+      return null;
+    }
+    return paramWs || loadChatWs();
+  });
+  const [chatWorkspaceLabel, setChatWorkspaceLabel] = useState(() => {
+    if (location.state?.forceNew) {
+      if (stateLabel) {
+        sessionStorage.setItem(CHAT_WS_LABEL_KEY, stateLabel);
+        return stateLabel;
+      }
+      sessionStorage.removeItem(CHAT_WS_LABEL_KEY);
+      return null;
+    }
+    return stateLabel || loadChatWsLabel();
+  });
   const [mode, setMode] = useState(getMode);
   const [model, setModel] = useState(getModel);
   const [models, setModels] = useState([]);
-  const [workspaces, setWorkspaces] = useState([]);
   const [loadingModels, setLoadingModels] = useState(true);
   const [initializing, setInitializing] = useState(true);
   const [loadingTranscript, setLoadingTranscript] = useState(false);
@@ -135,6 +184,9 @@ export default function Chat() {
   useEffect(() => { chatIdRef.current = chatId; }, [chatId]);
   // Abort controller for the active stream
   const streamControllerRef = useRef(null);
+
+  const [modeDropdownOpen, setModeDropdownOpen] = useState(false);
+  const modeRef = useRef(null);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -163,6 +215,38 @@ export default function Chat() {
     return () => clearInterval(id);
   }, [sending, streamStartedAt]);
 
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (modeRef.current && !modeRef.current.contains(event.target)) {
+        setModeDropdownOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  useEffect(() => {
+    if (location.state?.forceNew) {
+      window.history.replaceState({ ...location.state, forceNew: undefined }, document.title);
+    }
+  }, [location]);
+
+  // Save last active chat to localStorage
+  useEffect(() => {
+    if (chatId) {
+      const firstUserMsg = messages.find((m) => m.role === "user");
+      const title = firstUserMsg ? firstUserMsg.content : "Active Chat";
+      localStorage.setItem(
+        "remote-cursor-last-chat",
+        JSON.stringify({
+          id: chatId,
+          workspaceSlug: chatWorkspace || "",
+          title: title,
+        })
+      );
+    }
+  }, [chatId, chatWorkspace, messages]);
+
   // Load favorite models + workspace list on mount
   useEffect(() => {
     if (!getBackendUrl()) {
@@ -175,16 +259,11 @@ export default function Chat() {
 
     (async () => {
       try {
-        const [favResult, wsResult] = await Promise.all([
-          getFavoriteModels(),
-          getWorkspaces().catch(() => ({ data: { workspaces: [] } })),
-        ]);
+        const favResult = await getFavoriteModels();
 
         const list = Array.isArray(favResult.data?.favorites) ? favResult.data.favorites : [];
-        const wsList = Array.isArray(wsResult.data?.workspaces) ? wsResult.data.workspaces : [];
 
         if (!cancelled) {
-          setWorkspaces(wsList);
           if (list.length === 0) {
             setNoFavorites(true);
             setModels([]);
@@ -320,73 +399,6 @@ export default function Chat() {
     persistModel(nextModel);
   };
 
-  const handleWorkspaceChange = useCallback(
-    async (slug) => {
-      const ws = workspaces.find((w) => w.slug === slug) ?? null;
-      const newSlug = slug || null;
-      const newLabel = ws?.label ?? null;
-
-      setError(null);
-      setMessages([]);
-      setPrompt("");
-      setInitializing(true);
-      setChatId(null);
-      setChatWorkspace(newSlug);
-      setChatWorkspaceLabel(newLabel);
-      saveChatId(null);
-      saveChatWs(newSlug);
-      saveChatWsLabel(newLabel);
-
-      const newParams = {};
-      if (newSlug) newParams.workspace = newSlug;
-      setSearchParams(newParams, { replace: true });
-
-      try {
-        const result = await createChat();
-        const id = result.data?.chatId;
-        if (!id) throw new Error("Could not create chat session");
-        saveChatId(id);
-        setChatId(id);
-      } catch (err) {
-        setError(err.message || "Failed to start new chat");
-      } finally {
-        setInitializing(false);
-      }
-    },
-    [workspaces, setSearchParams],
-  );
-
-  const handleNewChat = useCallback(async () => {
-    streamControllerRef.current?.abort();
-    setError(null);
-    setMessages([]);
-    setPrompt("");
-    setInitializing(true);
-    setChatId(null);
-    saveChatId(null);
-    const wsToKeep = chatWorkspace;
-    const labelToKeep = chatWorkspaceLabel;
-
-    const newParams = {};
-    if (wsToKeep) newParams.workspace = wsToKeep;
-    setSearchParams(newParams, { replace: true });
-
-    try {
-      const result = await createChat();
-      const id = result.data?.chatId;
-      if (!id) throw new Error("Could not create chat session");
-      saveChatId(id);
-      setChatId(id);
-      setChatWorkspace(wsToKeep);
-      setChatWorkspaceLabel(labelToKeep);
-      saveChatWs(wsToKeep);
-      saveChatWsLabel(labelToKeep);
-    } catch (err) {
-      setError(err.message || "Failed to start new chat");
-    } finally {
-      setInitializing(false);
-    }
-  }, [chatWorkspace, chatWorkspaceLabel, setSearchParams]);
 
   /** Re-fetch the transcript from disk and reconcile with current in-memory messages. */
   const handleRefresh = useCallback(async () => {
@@ -636,12 +648,6 @@ export default function Chat() {
     [sending, chatWorkspace, runStream],
   );
 
-  const handleKeyDown = (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
-  };
 
   const modeLabel = MODES.find((m) => m.id === mode)?.label ?? "Agent";
   const isResuming = Boolean(paramId && paramWs);
@@ -667,57 +673,13 @@ export default function Chat() {
 
   const waitingLabel = getWaitingLabel(streamModeForLabel);
 
-  let subtitle;
-  if (loadingTranscript) subtitle = "Loading transcript…";
-  else if (initializing) subtitle = "Starting session…";
-  else if (refreshing) subtitle = "Refreshing…";
-  else if (sending) subtitle = `${modeLabel} · ${workingLabel}`;
-  else if (chatId) subtitle = isResuming ? `${modeLabel} · resumed` : `${modeLabel} · ready`;
-  else subtitle = "Offline";
-
   return (
     <div className="chat-page">
       <header className="chat-header">
-        <div className="chat-header-text">
-          <h1>Agent</h1>
-          <p className="chat-subtitle">{subtitle}</p>
-          {displayLabel && (
-            <span className="workspace-chip" title={chatWorkspace ?? ""}>
-              {displayLabel}
-            </span>
-          )}
-        </div>
-        <div className="chat-header-actions">
-          <button
-            type="button"
-            className={`btn btn-ghost btn-refresh${refreshing ? " refreshing" : ""}`}
-            onClick={handleRefresh}
-            disabled={!canRefresh}
-            aria-label="Refresh transcript"
-            title="Refresh transcript"
-            style={{ cursor: canRefresh ? "pointer" : "default" }}
-          >
-            ↻
-          </button>
-          <button
-            type="button"
-            className="btn btn-ghost"
-            onClick={handleNewChat}
-            disabled={busy || noBackend}
-            style={{ cursor: "pointer" }}
-          >
-            New chat
-          </button>
-        </div>
+        <h1 className="chat-header-workspace" title={chatWorkspace ?? ""}>
+          {displayLabel || "No workspace"}
+        </h1>
       </header>
-
-      {sending && (
-        <AgentWorkingBar
-          label={workingLabel}
-          elapsedSeconds={elapsedSeconds}
-          showTimer={showWorkingTimer}
-        />
-      )}
 
       {isResuming && (
         <div className="chat-resume-bar">
@@ -733,53 +695,82 @@ export default function Chat() {
       )}
 
       <div className="chat-controls">
-        <div className="mode-picker" role="group" aria-label="Agent mode">
-          {MODES.map((m) => (
-            <button
-              key={m.id}
-              type="button"
-              className={`mode-btn${mode === m.id ? " active" : ""}`}
-              onClick={() => handleModeChange(m.id)}
-              disabled={sending}
-              style={{ cursor: "pointer" }}
-            >
-              {m.label}
-            </button>
-          ))}
+        <div className="chat-controls-row">
+          <div className="chat-selectors">
+            <div className="mode-dropdown" ref={modeRef}>
+              <button
+                type="button"
+                className={`mode-dropdown-trigger mode-theme-${mode}`}
+                onClick={() => setModeDropdownOpen(!modeDropdownOpen)}
+                disabled={sending}
+                style={{ cursor: sending ? "default" : "pointer" }}
+              >
+                <span className="mode-icon-wrapper">
+                  {getModeIcon(mode)}
+                </span>
+                <span className="mode-label-text">{MODES.find((m) => m.id === mode)?.label || "Agent"}</span>
+                <span className="mode-arrow">▼</span>
+              </button>
+
+              {modeDropdownOpen && (
+                <div className="mode-dropdown-menu">
+                  {MODES.map((m) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      className={`mode-dropdown-item mode-theme-${m.id}${mode === m.id ? " active" : ""}`}
+                      onClick={() => {
+                        handleModeChange(m.id);
+                        setModeDropdownOpen(false);
+                      }}
+                      style={{ cursor: "pointer" }}
+                    >
+                      <span className="mode-icon-wrapper">
+                        {getModeIcon(m.id)}
+                      </span>
+                      <span>{m.label}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <label className="model-picker">
+              <span className="visually-hidden">Model</span>
+              <select
+                value={model}
+                onChange={handleModelChange}
+                disabled={sending || loadingModels || noBackend || noFavorites}
+              >
+                {models.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <button
+            type="button"
+            className={`btn btn-refresh-round${refreshing ? " refreshing" : ""}`}
+            onClick={handleRefresh}
+            disabled={!canRefresh}
+            aria-label="Refresh transcript"
+            title="Refresh transcript"
+            style={{ cursor: canRefresh ? "pointer" : "default" }}
+          >
+            ↻
+          </button>
         </div>
 
-        <div className="chat-selectors">
-          <label className="model-picker">
-            <span className="visually-hidden">Model</span>
-            <select
-              value={model}
-              onChange={handleModelChange}
-              disabled={sending || loadingModels || noBackend || noFavorites}
-            >
-              {models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="workspace-picker">
-            <span className="visually-hidden">Workspace</span>
-            <select
-              value={chatWorkspace ?? ""}
-              onChange={(e) => handleWorkspaceChange(e.target.value || null)}
-              disabled={sending || noBackend}
-            >
-              <option value="">No workspace</option>
-              {workspaces.map((ws) => (
-                <option key={ws.slug} value={ws.slug} disabled={!ws.path}>
-                  {ws.label}{!ws.path ? " (no path)" : ""}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
+        {sending && (
+          <AgentWorkingBar
+            label={workingLabel}
+            elapsedSeconds={elapsedSeconds}
+            showTimer={showWorkingTimer}
+          />
+        )}
       </div>
 
       {noBackend && (
@@ -839,7 +830,6 @@ export default function Chat() {
           placeholder={`Message (${modeLabel.toLowerCase()} mode)…`}
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
-          onKeyDown={handleKeyDown}
           disabled={busy || noBackend || !chatId || noFavorites}
         />
         <button
@@ -857,12 +847,12 @@ export default function Chat() {
           style={{ cursor: busy || !prompt.trim() || noBackend || !chatId || noFavorites ? "default" : "pointer" }}
         >
           {busy ? (
-            <>
-              <span className="dot-pulse" aria-hidden="true" />
-              Working…
-            </>
+            <span className="dot-pulse" aria-hidden="true" />
           ) : (
-            "Send"
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="19" x2="12" y2="5"></line>
+              <polyline points="5 12 12 5 19 12"></polyline>
+            </svg>
           )}
         </button>
       </div>
