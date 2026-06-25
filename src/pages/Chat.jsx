@@ -106,6 +106,7 @@ export default function Chat() {
   const [initializing, setInitializing] = useState(true);
   const [loadingTranscript, setLoadingTranscript] = useState(false);
   const [sending, setSending] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
   const [noBackend, setNoBackend] = useState(false);
   const [noFavorites, setNoFavorites] = useState(false);
@@ -351,6 +352,68 @@ export default function Chat() {
     }
   }, [chatWorkspace, chatWorkspaceLabel, setSearchParams]);
 
+  /** Re-fetch the transcript from disk and reconcile with current in-memory messages. */
+  const handleRefresh = useCallback(async () => {
+    const currentId = chatIdRef.current;
+    const currentWs = chatWorkspace;
+    if (!currentId || !currentWs || refreshing || sending) return;
+
+    setRefreshing(true);
+    setError(null);
+
+    try {
+      const result = await getChat(currentId, currentWs);
+      const transcript = result.data;
+
+      // Build a set of content strings already in memory so we don't duplicate
+      setMessages((prev) => {
+        const existingContents = new Set(
+          prev.filter((m) => m.type === "text").map((m) => m.content.trim()),
+        );
+
+        const freshMessages = (transcript.messages || [])
+          .map((m) => ({ role: m.role, text: m.text.trim() }))
+          .filter((m) => m.text && !existingContents.has(m.text))
+          .map((m) => ({
+            id: crypto.randomUUID(),
+            role: m.role,
+            type: "text",
+            content: m.text,
+          }));
+
+        // Update todos on any existing plan card if the transcript has a plan
+        const refreshedPlan = transcript.plan ?? null;
+        const updated = prev.map((m) => {
+          if (m.type !== "plan" || !refreshedPlan) return m;
+          return {
+            ...m,
+            plan: refreshedPlan,
+            executed: refreshedPlan.todos?.some((t) => t.status === "completed") ?? m.executed,
+          };
+        });
+
+        // If there's a plan in the transcript but no plan card yet, append one
+        const hasPlanCard = prev.some((m) => m.type === "plan");
+        if (refreshedPlan && !hasPlanCard) {
+          updated.push({
+            id: crypto.randomUUID(),
+            role: "assistant",
+            type: "plan",
+            plan: refreshedPlan,
+            executing: false,
+            executed: refreshedPlan.todos?.some((t) => t.status === "completed") ?? false,
+          });
+        }
+
+        return [...updated, ...freshMessages];
+      });
+    } catch (err) {
+      setError(err.message || "Failed to refresh transcript");
+    } finally {
+      setRefreshing(false);
+    }
+  }, [chatWorkspace, refreshing, sending]);
+
   /**
    * Core streaming send. Adds a user message, opens an SSE stream, accumulates
    * text deltas into a live assistant bubble, then on a plan event inserts a
@@ -543,10 +606,12 @@ export default function Chat() {
   const isResuming = Boolean(paramId && paramWs);
   const busy = sending || initializing || loadingTranscript;
   const displayLabel = chatWorkspaceLabel || chatWorkspace;
+  const canRefresh = Boolean(chatIdRef.current && chatWorkspace && !busy && !refreshing && !noBackend);
 
   let subtitle;
   if (loadingTranscript) subtitle = "Loading transcript…";
   else if (initializing) subtitle = "Starting session…";
+  else if (refreshing) subtitle = "Refreshing…";
   else if (sending) subtitle = `${modeLabel} · streaming…`;
   else if (chatId) subtitle = isResuming ? `${modeLabel} · resumed` : `${modeLabel} · ready`;
   else subtitle = "Offline";
@@ -563,15 +628,28 @@ export default function Chat() {
             </span>
           )}
         </div>
-        <button
-          type="button"
-          className="btn btn-ghost"
-          onClick={handleNewChat}
-          disabled={busy || noBackend}
-          style={{ cursor: "pointer" }}
-        >
-          New chat
-        </button>
+        <div className="chat-header-actions">
+          <button
+            type="button"
+            className={`btn btn-ghost btn-refresh${refreshing ? " refreshing" : ""}`}
+            onClick={handleRefresh}
+            disabled={!canRefresh}
+            aria-label="Refresh transcript"
+            title="Refresh transcript"
+            style={{ cursor: canRefresh ? "pointer" : "default" }}
+          >
+            ↻
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={handleNewChat}
+            disabled={busy || noBackend}
+            style={{ cursor: "pointer" }}
+          >
+            New chat
+          </button>
+        </div>
       </header>
 
       {isResuming && (

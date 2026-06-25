@@ -1284,6 +1284,35 @@ body {
   cursor: not-allowed;
 }
 
+/* ── Chat header action buttons ─────────────────────────────────────────────── */
+
+.chat-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.btn-refresh {
+  width: 36px;
+  min-width: 36px;
+  padding: 0;
+  font-size: 1.2rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-refresh.refreshing {
+  animation: spin 0.8s linear infinite;
+  opacity: 0.6;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 /* ── Plan card ───────────────────────────────────────────────────────────────── */
 
 .plan-card {
