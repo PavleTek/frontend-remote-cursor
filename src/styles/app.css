@@ -366,6 +366,7 @@ body {
 .chat-header {
   display: flex;
   align-items: center;
+  gap: 8px;
   flex-shrink: 0;
   padding:
     calc(6px + var(--safe-top))
@@ -375,6 +376,29 @@ body {
   border-bottom: 1px solid var(--border);
   background: var(--surface);
   min-height: 0;
+}
+
+.chat-header-back {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 0.15s, background 0.15s;
+}
+
+.chat-header-back:hover {
+  color: var(--text);
+  background: var(--surface-raised);
 }
 
 .chat-header-workspace {
@@ -1393,15 +1417,6 @@ body {
 
 .btn-text:hover {
   text-decoration: underline;
-}
-
-/* Chat resume bar */
-.chat-resume-bar {
-  flex-shrink: 0;
-  padding: 8px 16px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
-  font-size: 0.82rem;
 }
 
 /* "New chat in this project" button in list-header */

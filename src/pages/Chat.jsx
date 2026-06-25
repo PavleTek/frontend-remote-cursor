@@ -48,6 +48,61 @@ function saveChatWsLabel(label) {
   else sessionStorage.removeItem(CHAT_WS_LABEL_KEY);
 }
 
+function humanizeName(name) {
+  return name
+    .replace(/-/g, " ")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+function slugToShortLabel(slug) {
+  if (!slug) return "";
+
+  if (slug.endsWith("-code-workspace")) {
+    const prefix = slug.slice(0, -"-code-workspace".length);
+    const tokens = prefix.split("-");
+    const fileBase = tokens[tokens.length - 1];
+    if (fileBase.length > 3 || /[A-Z]/.test(fileBase)) {
+      return humanizeName(fileBase);
+    }
+    const parentToken = tokens[tokens.length - 2];
+    if (parentToken) {
+      return `${humanizeName(parentToken)} (${fileBase})`;
+    }
+    return humanizeName(fileBase);
+  }
+
+  if (slug.endsWith("-workspace-json")) {
+    const match = slug.match(/-(\d+)-workspace-json$/);
+    return match ? `Cursor Workspace ${match[1]}` : slug.replace(/-workspace-json$/, "");
+  }
+
+  const tokens = slug.split("-");
+  const meaningful = tokens.filter((t) => t.length > 2 && /[a-z]/i.test(t));
+  if (meaningful.length === 0) return slug;
+
+  return humanizeName(meaningful.slice(-2).join("-"));
+}
+
+function looksLikeSlug(value) {
+  return (
+    value.endsWith("-code-workspace")
+    || value.endsWith("-workspace-json")
+    || (value.includes("-") && !value.includes(" ") && value.split("-").length >= 4)
+  );
+}
+
+function formatWorkspaceDisplay(label, slug) {
+  const raw = label || slug;
+  if (!raw) return "";
+  if (label && !looksLikeSlug(label)) return label;
+  return slugToShortLabel(slug || label) || raw;
+}
+
 /**
  * Message shapes:
  *   { id, role:"user",      type:"text",    content:string }
@@ -652,7 +707,8 @@ export default function Chat() {
   const modeLabel = MODES.find((m) => m.id === mode)?.label ?? "Agent";
   const isResuming = Boolean(paramId && paramWs);
   const busy = sending || initializing || loadingTranscript || refreshing;
-  const displayLabel = chatWorkspaceLabel || chatWorkspace;
+  const displayLabel = formatWorkspaceDisplay(chatWorkspaceLabel, chatWorkspace);
+  const fullWorkspaceTitle = chatWorkspaceLabel || chatWorkspace || "";
   const canRefresh = Boolean(chatIdRef.current && chatWorkspace && !busy && !noBackend);
 
   const streamingBubble = messages.find((m) => m.type === "text" && m.streaming);
@@ -676,23 +732,23 @@ export default function Chat() {
   return (
     <div className="chat-page">
       <header className="chat-header">
-        <h1 className="chat-header-workspace" title={chatWorkspace ?? ""}>
+        {isResuming && (
+          <button
+            type="button"
+            className="chat-header-back"
+            onClick={() => navigate(-1)}
+            aria-label="Back to chats"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M19 12H5" />
+              <path d="M12 19l-7-7 7-7" />
+            </svg>
+          </button>
+        )}
+        <h1 className="chat-header-workspace" title={fullWorkspaceTitle}>
           {displayLabel || "No workspace"}
         </h1>
       </header>
-
-      {isResuming && (
-        <div className="chat-resume-bar">
-          <button
-            type="button"
-            className="btn-text"
-            onClick={() => navigate(-1)}
-            style={{ cursor: "pointer" }}
-          >
-            ← Back to chats
-          </button>
-        </div>
-      )}
 
       <div className="chat-controls">
         <div className="chat-controls-row">
