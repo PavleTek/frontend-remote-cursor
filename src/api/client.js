@@ -1,4 +1,5 @@
 const STORAGE_KEY = "remote-cursor-backend-url";
+const API_KEY_STORAGE_KEY = "remote-cursor-api-key";
 
 export function getBackendUrl() {
   return localStorage.getItem(STORAGE_KEY) ?? "";
@@ -8,11 +9,29 @@ export function setBackendUrl(url) {
   localStorage.setItem(STORAGE_KEY, url.replace(/\/+$/, ""));
 }
 
+export function getApiKey() {
+  return localStorage.getItem(API_KEY_STORAGE_KEY) ?? "";
+}
+
+export function setApiKey(key) {
+  const trimmed = key.trim();
+  if (trimmed) {
+    localStorage.setItem(API_KEY_STORAGE_KEY, trimmed);
+  } else {
+    localStorage.removeItem(API_KEY_STORAGE_KEY);
+  }
+}
+
 function buildHeaders() {
-  return {
+  const headers = {
     "Content-Type": "application/json",
     "ngrok-skip-browser-warning": "true",
   };
+  const apiKey = getApiKey();
+  if (apiKey) {
+    headers["X-API-Key"] = apiKey;
+  }
+  return headers;
 }
 
 export async function apiRequest(path, options = {}) {
@@ -115,10 +134,7 @@ export function streamPrompt(payload, handlers = {}) {
       response = await fetch(url, {
         method: "POST",
         signal: controller.signal,
-        headers: {
-          "Content-Type": "application/json",
-          "ngrok-skip-browser-warning": "true",
-        },
+        headers: buildHeaders(),
         body: JSON.stringify(payload),
       });
     } catch (err) {

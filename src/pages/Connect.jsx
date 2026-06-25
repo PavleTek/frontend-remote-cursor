@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { setBackendUrl } from "../api/client.js";
+import { setApiKey, setBackendUrl } from "../api/client.js";
 
 export default function Connect() {
   const [searchParams] = useSearchParams();
@@ -9,6 +9,7 @@ export default function Connect() {
 
   useEffect(() => {
     const backend = searchParams.get("backend");
+    const key = searchParams.get("key");
 
     if (!backend) {
       setError("Missing backend URL. Scan the QR code from your Mac again.");
@@ -19,10 +20,13 @@ export default function Connect() {
       const decoded = decodeURIComponent(backend).replace(/\/+$/, "");
       new URL(decoded);
       setBackendUrl(decoded);
+      if (key) {
+        setApiKey(decodeURIComponent(key));
+      }
 
       navigate("/", {
         replace: true,
-        state: { connected: true, backendUrl: decoded },
+        state: { connected: true, backendUrl: decoded, hasApiKey: Boolean(key) },
       });
     } catch {
       setError("Invalid backend URL in link.");

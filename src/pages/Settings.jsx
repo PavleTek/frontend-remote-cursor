@@ -4,13 +4,16 @@ import ModelFavoritesPicker from "../components/ModelFavoritesPicker.jsx";
 import {
   checkHealth,
   getAbout,
+  getApiKey,
   getBackendUrl,
+  setApiKey,
   setBackendUrl,
 } from "../api/client.js";
 
 export default function Settings() {
   const location = useLocation();
   const [backendUrl, setBackendUrlInput] = useState("");
+  const [apiKey, setApiKeyInput] = useState("");
   const [saved, setSaved] = useState(false);
   const [justConnected, setJustConnected] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -19,6 +22,7 @@ export default function Settings() {
 
   useEffect(() => {
     setBackendUrlInput(getBackendUrl());
+    setApiKeyInput(getApiKey());
   }, []);
 
   useEffect(() => {
@@ -33,11 +37,12 @@ export default function Settings() {
 
   const handleSave = useCallback(() => {
     setBackendUrl(backendUrl.trim());
+    setApiKey(apiKey.trim());
     setSaved(true);
     setError(null);
     setResult(null);
     setTimeout(() => setSaved(false), 2000);
-  }, [backendUrl]);
+  }, [backendUrl, apiKey]);
 
   const runTest = useCallback(async (fn, label) => {
     setLoading(true);
@@ -66,7 +71,10 @@ export default function Settings() {
       <main className="main">
         {justConnected && (
           <section className="card banner-card">
-            <p className="status success">Connected via QR — backend URL saved</p>
+            <p className="status success">
+              Connected via QR — backend URL
+              {location.state?.hasApiKey ? " and API key" : ""} saved
+            </p>
           </section>
         )}
 
@@ -88,6 +96,20 @@ export default function Settings() {
               placeholder="https://your-tunnel.ngrok-free.app"
               value={backendUrl}
               onChange={(e) => setBackendUrlInput(e.target.value)}
+            />
+          </label>
+
+          <label className="field">
+            <span>API key</span>
+            <input
+              type="password"
+              autoComplete="off"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              placeholder="Set automatically when scanning the QR code"
+              value={apiKey}
+              onChange={(e) => setApiKeyInput(e.target.value)}
             />
           </label>
 
