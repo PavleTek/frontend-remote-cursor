@@ -152,6 +152,21 @@ export default function Workspaces() {
                 </div>
                 <button
                   type="button"
+                  className="btn-ws-new"
+                  title={ws.path ? "New chat in this project" : "No resolved path — add one in data/workspaces.json"}
+                  disabled={!ws.path}
+                  onClick={() =>
+                    navigate(`/chat?workspace=${encodeURIComponent(ws.slug)}`, {
+                      state: { workspaceLabel: ws.label },
+                    })
+                  }
+                  aria-label={`New chat in ${ws.label}`}
+                  style={{ cursor: ws.path ? "pointer" : "not-allowed" }}
+                >
+                  +
+                </button>
+                <button
+                  type="button"
                   className={`btn-pin${ws.pinned ? " active" : ""}`}
                   title={ws.pinned ? "Unpin" : "Pin"}
                   disabled={savingSlug === ws.slug}

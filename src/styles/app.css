@@ -14,6 +14,7 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
   --safe-right: env(safe-area-inset-right, 0px);
+  --bottom-nav-height: calc(52px + var(--safe-bottom));
 }
 
 *,
@@ -27,6 +28,8 @@
 html {
   -webkit-text-size-adjust: 100%;
   touch-action: manipulation;
+  height: 100%;
+  overflow: hidden;
 }
 
 body {
@@ -34,21 +37,24 @@ body {
   background: var(--bg);
   color: var(--text);
   line-height: 1.5;
-  min-height: 100dvh;
-  overflow-x: hidden;
+  height: 100%;
+  overflow: hidden;
 }
 
 #root {
-  min-height: 100dvh;
+  height: 100dvh;
+  overflow: hidden;
 }
 
 .shell {
   display: flex;
   flex-direction: column;
-  min-height: 100dvh;
+  height: 100dvh;
+  max-height: 100dvh;
   max-width: 480px;
   margin: 0 auto;
   background: var(--bg);
+  overflow: hidden;
 }
 
 .shell-content {
@@ -57,16 +63,21 @@ body {
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
+  padding-bottom: var(--bottom-nav-height);
 }
 
 .page {
   display: flex;
   flex-direction: column;
-  min-height: 100%;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   padding:
     calc(16px + var(--safe-top))
     calc(16px + var(--safe-right))
-    calc(16px + var(--safe-bottom))
+    16px
     calc(16px + var(--safe-left));
 }
 
@@ -306,13 +317,20 @@ body {
   }
 }
 
-/* Bottom navigation */
+/* Bottom navigation — always pinned to viewport bottom */
 .bottom-nav {
+  position: fixed;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100;
   display: flex;
-  flex-shrink: 0;
+  width: 100%;
+  max-width: 480px;
   border-top: 1px solid var(--border);
   background: var(--surface);
   padding-bottom: var(--safe-bottom);
+  box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.35);
 }
 
 .nav-item {
@@ -338,8 +356,10 @@ body {
 .chat-page {
   display: flex;
   flex-direction: column;
-  height: 100dvh;
-  max-height: 100dvh;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  max-height: 100%;
   overflow: hidden;
 }
 
@@ -358,6 +378,13 @@ body {
   background: var(--surface);
 }
 
+.chat-header-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
 .chat-header h1 {
   font-size: 1.15rem;
   font-weight: 700;
@@ -368,7 +395,24 @@ body {
 .chat-subtitle {
   font-size: 0.78rem;
   color: var(--text-muted);
-  margin-top: 2px;
+}
+
+/* Workspace chip shown below the subtitle in the chat header */
+.workspace-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 2px 8px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 15%, var(--surface-raised));
+  color: #c8c0ff;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: default;
 }
 
 .chat-controls {
@@ -379,6 +423,51 @@ body {
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
+}
+
+/* Row of model + workspace selects */
+.chat-selectors {
+  display: flex;
+  gap: 8px;
+}
+
+.chat-selectors .model-picker {
+  flex: 1;
+}
+
+/* Workspace picker — same visual treatment as the model select */
+.workspace-picker {
+  flex: 1;
+}
+
+.workspace-picker select {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 14px;
+  font-size: 16px;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  outline: none;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%238888a0' d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  padding-right: 36px;
+  transition: border-color 0.15s;
+}
+
+.workspace-picker select:focus {
+  border-color: var(--accent);
+}
+
+.workspace-picker select:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .mode-picker {
@@ -590,7 +679,7 @@ body {
   padding:
     10px
     calc(12px + var(--safe-right))
-    calc(10px + var(--safe-bottom))
+    10px
     calc(12px + var(--safe-left));
   border-top: 1px solid var(--border);
   background: var(--surface);
@@ -795,8 +884,10 @@ body {
 .list-page {
   display: flex;
   flex-direction: column;
-  height: 100dvh;
-  max-height: 100dvh;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  max-height: 100%;
   overflow: hidden;
 }
 
@@ -921,7 +1012,7 @@ body {
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   list-style: none;
-  padding: 8px 0 calc(8px + var(--safe-bottom));
+  padding: 8px 0 8px;
 }
 
 .list li + li {
@@ -1145,4 +1236,50 @@ body {
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   font-size: 0.82rem;
+}
+
+/* "New chat in this project" button in list-header */
+.list-header-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.btn-new-chat {
+  flex-shrink: 0;
+  min-height: 38px;
+  padding: 8px 14px;
+  font-size: 0.85rem;
+}
+
+/* Per-row "+ New chat" button on Projects */
+.btn-ws-new {
+  flex-shrink: 0;
+  align-self: stretch;
+  width: 36px;
+  min-width: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.15rem;
+  font-weight: 700;
+  line-height: 1;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  border-radius: 8px;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 0.15s, background 0.15s;
+}
+
+.btn-ws-new:not(:disabled):hover {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-raised));
+}
+
+.btn-ws-new:disabled {
+  opacity: 0.25;
+  cursor: not-allowed;
 }

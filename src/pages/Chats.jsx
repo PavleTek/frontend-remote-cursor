@@ -81,7 +81,7 @@ export default function Chats() {
   return (
     <div className="list-page">
       <header className="list-header">
-        <div>
+        <div className="list-header-text">
           <h1>{title}</h1>
           {workspaceFilter && (
             <p className="list-subtitle">
@@ -95,6 +95,20 @@ export default function Chats() {
             </p>
           )}
         </div>
+        {workspaceFilter && (
+          <button
+            type="button"
+            className="btn btn-ghost btn-new-chat"
+            onClick={() =>
+              navigate(`/chat?workspace=${encodeURIComponent(workspaceFilter)}`, {
+                state: { workspaceLabel: chats[0]?.workspaceLabel || workspaceFilter },
+              })
+            }
+            style={{ cursor: "pointer" }}
+          >
+            + New chat
+          </button>
+        )}
       </header>
 
       <div className="search-bar">

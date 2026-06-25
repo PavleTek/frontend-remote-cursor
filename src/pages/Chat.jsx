@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
   createChat,
   getBackendUrl,
   getChat,
   getFavoriteModels,
+  getWorkspaces,
   sendPrompt,
 } from "../api/client.js";
 import {
@@ -17,6 +18,7 @@ import {
 
 const CHAT_ID_KEY = "remote-cursor-chat-id";
 const CHAT_WS_KEY = "remote-cursor-chat-workspace";
+const CHAT_WS_LABEL_KEY = "remote-cursor-chat-workspace-label";
 
 function loadChatId() {
   return sessionStorage.getItem(CHAT_ID_KEY) ?? null;
@@ -36,6 +38,15 @@ function saveChatWs(ws) {
   else sessionStorage.removeItem(CHAT_WS_KEY);
 }
 
+function loadChatWsLabel() {
+  return sessionStorage.getItem(CHAT_WS_LABEL_KEY) ?? null;
+}
+
+function saveChatWsLabel(label) {
+  if (label) sessionStorage.setItem(CHAT_WS_LABEL_KEY, label);
+  else sessionStorage.removeItem(CHAT_WS_LABEL_KEY);
+}
+
 function extractResponseText(result) {
   if (typeof result.data === "string" && result.data.trim()) {
     return result.data.trim();
@@ -50,18 +61,25 @@ function extractResponseText(result) {
 
 export default function Chat() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
   const navigate = useNavigate();
 
   const paramId = searchParams.get("id");
   const paramWs = searchParams.get("workspace");
+  // Label may arrive via navigation state (e.g. from Projects or Chats pages)
+  const stateLabel = location.state?.workspaceLabel ?? null;
 
   const [messages, setMessages] = useState([]);
   const [prompt, setPrompt] = useState("");
   const [chatId, setChatId] = useState(() => paramId || loadChatId());
   const [chatWorkspace, setChatWorkspace] = useState(() => paramWs || loadChatWs());
+  const [chatWorkspaceLabel, setChatWorkspaceLabel] = useState(
+    () => stateLabel || loadChatWsLabel(),
+  );
   const [mode, setMode] = useState(getMode);
   const [model, setModel] = useState(getModel);
   const [models, setModels] = useState([]);
+  const [workspaces, setWorkspaces] = useState([]);
   const [loadingModels, setLoadingModels] = useState(true);
   const [initializing, setInitializing] = useState(true);
   const [loadingTranscript, setLoadingTranscript] = useState(false);
@@ -80,7 +98,7 @@ export default function Chat() {
     scrollToBottom();
   }, [messages, sending, scrollToBottom]);
 
-  // Load favorite models
+  // Load favorite models + workspace list on mount
   useEffect(() => {
     if (!getBackendUrl()) {
       setNoBackend(true);
@@ -92,10 +110,16 @@ export default function Chat() {
 
     (async () => {
       try {
-        const result = await getFavoriteModels();
-        const list = Array.isArray(result.data?.favorites) ? result.data.favorites : [];
+        const [favResult, wsResult] = await Promise.all([
+          getFavoriteModels(),
+          getWorkspaces().catch(() => ({ data: { workspaces: [] } })),
+        ]);
+
+        const list = Array.isArray(favResult.data?.favorites) ? favResult.data.favorites : [];
+        const wsList = Array.isArray(wsResult.data?.workspaces) ? wsResult.data.workspaces : [];
 
         if (!cancelled) {
+          setWorkspaces(wsList);
           if (list.length === 0) {
             setNoFavorites(true);
             setModels([]);
@@ -152,6 +176,10 @@ export default function Chat() {
           setChatWorkspace(paramWs);
           saveChatId(transcript.id);
           saveChatWs(paramWs);
+          if (stateLabel) {
+            setChatWorkspaceLabel(stateLabel);
+            saveChatWsLabel(stateLabel);
+          }
         }
       } catch (err) {
         if (!cancelled) setError(err.message || "Failed to load transcript");
@@ -166,7 +194,7 @@ export default function Chat() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paramId, paramWs]);
 
-  // Create a new chat if no chatId and no params
+  // Create a new chat (possibly targeted at a workspace) when there's no chatId
   useEffect(() => {
     if (!getBackendUrl()) {
       setInitializing(false);
@@ -187,9 +215,16 @@ export default function Chat() {
         if (!id) throw new Error("Could not create chat session");
         if (!cancelled) {
           saveChatId(id);
-          saveChatWs(null);
           setChatId(id);
-          setChatWorkspace(null);
+          // If a workspace was specified via param but no id, keep it
+          if (paramWs) {
+            setChatWorkspace(paramWs);
+            saveChatWs(paramWs);
+            if (stateLabel) {
+              setChatWorkspaceLabel(stateLabel);
+              saveChatWsLabel(stateLabel);
+            }
+          }
         }
       } catch (err) {
         if (!cancelled) setError(err.message || "Failed to start chat");
@@ -201,6 +236,7 @@ export default function Chat() {
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatId, paramId, paramWs]);
 
   const handleModeChange = (nextMode) => {
@@ -214,17 +250,57 @@ export default function Chat() {
     persistModel(nextModel);
   };
 
+  // Change workspace from the picker — starts a fresh chat in that workspace
+  const handleWorkspaceChange = useCallback(
+    async (slug) => {
+      const ws = workspaces.find((w) => w.slug === slug) ?? null;
+      const newSlug = slug || null;
+      const newLabel = ws?.label ?? null;
+
+      setError(null);
+      setMessages([]);
+      setPrompt("");
+      setInitializing(true);
+      setChatId(null);
+      setChatWorkspace(newSlug);
+      setChatWorkspaceLabel(newLabel);
+      saveChatId(null);
+      saveChatWs(newSlug);
+      saveChatWsLabel(newLabel);
+
+      const newParams = {};
+      if (newSlug) newParams.workspace = newSlug;
+      setSearchParams(newParams, { replace: true });
+
+      try {
+        const result = await createChat();
+        const id = result.data?.chatId;
+        if (!id) throw new Error("Could not create chat session");
+        saveChatId(id);
+        setChatId(id);
+      } catch (err) {
+        setError(err.message || "Failed to start new chat");
+      } finally {
+        setInitializing(false);
+      }
+    },
+    [workspaces, setSearchParams],
+  );
+
   const handleNewChat = useCallback(async () => {
     setError(null);
     setMessages([]);
     setPrompt("");
     setInitializing(true);
     setChatId(null);
-    setChatWorkspace(null);
     saveChatId(null);
-    saveChatWs(null);
-    // Clear query params so the transcript loader doesn't fire
-    setSearchParams({}, { replace: true });
+    // Preserve workspace if one is set
+    const wsToKeep = chatWorkspace;
+    const labelToKeep = chatWorkspaceLabel;
+
+    const newParams = {};
+    if (wsToKeep) newParams.workspace = wsToKeep;
+    setSearchParams(newParams, { replace: true });
 
     try {
       const result = await createChat();
@@ -232,12 +308,16 @@ export default function Chat() {
       if (!id) throw new Error("Could not create chat session");
       saveChatId(id);
       setChatId(id);
+      setChatWorkspace(wsToKeep);
+      setChatWorkspaceLabel(labelToKeep);
+      saveChatWs(wsToKeep);
+      saveChatWsLabel(labelToKeep);
     } catch (err) {
       setError(err.message || "Failed to start new chat");
     } finally {
       setInitializing(false);
     }
-  }, [setSearchParams]);
+  }, [chatWorkspace, chatWorkspaceLabel, setSearchParams]);
 
   const handleSend = useCallback(async () => {
     const text = prompt.trim();
@@ -256,7 +336,8 @@ export default function Chat() {
         chatId,
         mode,
         model,
-        workspace: chatWorkspace || undefined,
+        // Send workspaceSlug so the backend can resolve slug → real path
+        workspaceSlug: chatWorkspace || undefined,
       });
       if (!result.ok) {
         throw new Error(result.stderr || result.error || "Agent request failed");
@@ -287,6 +368,7 @@ export default function Chat() {
   const modeLabel = MODES.find((m) => m.id === mode)?.label ?? "Agent";
   const isResuming = Boolean(paramId && paramWs);
   const busy = sending || initializing || loadingTranscript;
+  const displayLabel = chatWorkspaceLabel || chatWorkspace;
 
   let subtitle;
   if (loadingTranscript) subtitle = "Loading transcript…";
@@ -298,9 +380,14 @@ export default function Chat() {
   return (
     <div className="chat-page">
       <header className="chat-header">
-        <div>
+        <div className="chat-header-text">
           <h1>Agent</h1>
           <p className="chat-subtitle">{subtitle}</p>
+          {displayLabel && (
+            <span className="workspace-chip" title={chatWorkspace ?? ""}>
+              {displayLabel}
+            </span>
+          )}
         </div>
         <button
           type="button"
@@ -342,20 +429,38 @@ export default function Chat() {
           ))}
         </div>
 
-        <label className="model-picker">
-          <span className="visually-hidden">Model</span>
-          <select
-            value={model}
-            onChange={handleModelChange}
-            disabled={sending || loadingModels || noBackend || noFavorites}
-          >
-            {models.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.label}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="chat-selectors">
+          <label className="model-picker">
+            <span className="visually-hidden">Model</span>
+            <select
+              value={model}
+              onChange={handleModelChange}
+              disabled={sending || loadingModels || noBackend || noFavorites}
+            >
+              {models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="workspace-picker">
+            <span className="visually-hidden">Workspace</span>
+            <select
+              value={chatWorkspace ?? ""}
+              onChange={(e) => handleWorkspaceChange(e.target.value || null)}
+              disabled={sending || noBackend}
+            >
+              <option value="">No workspace</option>
+              {workspaces.map((ws) => (
+                <option key={ws.slug} value={ws.slug} disabled={!ws.path}>
+                  {ws.label}{!ws.path ? " (no path)" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
       </div>
 
       {noBackend && (
@@ -379,9 +484,13 @@ export default function Chat() {
         {messages.length === 0 && !busy && (
           <div className="empty-state">
             <p>Send a prompt to your Mac&apos;s Cursor agent.</p>
-            <p className="hint">
-              Ask = Q&amp;A only · Plan = read-only planning · Agent = full access
-            </p>
+            {chatWorkspace ? (
+              <p className="hint">Working in: {displayLabel}</p>
+            ) : (
+              <p className="hint">
+                Ask = Q&amp;A only · Plan = read-only planning · Agent = full access
+              </p>
+            )}
           </div>
         )}
 
