@@ -6,8 +6,9 @@ import {
   getChat,
   getFavoriteModels,
   getWorkspaces,
-  sendPrompt,
+  streamPrompt,
 } from "../api/client.js";
+import PlanView from "../components/PlanView.jsx";
 import {
   getMode,
   getModel,
@@ -47,16 +48,38 @@ function saveChatWsLabel(label) {
   else sessionStorage.removeItem(CHAT_WS_LABEL_KEY);
 }
 
-function extractResponseText(result) {
-  if (typeof result.data === "string" && result.data.trim()) {
-    return result.data.trim();
+/**
+ * Message shapes:
+ *   { id, role:"user",      type:"text",    content:string }
+ *   { id, role:"assistant", type:"text",    content:string, streaming?:true }
+ *   { id, role:"assistant", type:"plan",    plan:{name,overview,plan,todos[]},
+ *                                           executing:bool, executed:bool }
+ */
+
+function MessageBubble({ msg, onExecutePlan }) {
+  if (msg.type === "plan") {
+    return (
+      <div className="message message-assistant">
+        <span className="message-label">Agent</span>
+        <PlanView
+          plan={msg.plan}
+          executing={msg.executing}
+          executed={msg.executed}
+          onExecute={() => onExecutePlan(msg.id)}
+        />
+      </div>
+    );
   }
-  if (result.data && typeof result.data === "object") {
-    return JSON.stringify(result.data, null, 2);
-  }
-  if (result.stdout?.trim()) return result.stdout.trim();
-  if (result.stderr?.trim()) return result.stderr.trim();
-  return "No response from agent.";
+
+  return (
+    <div className={`message message-${msg.role}`}>
+      <span className="message-label">{msg.role === "user" ? "You" : "Agent"}</span>
+      <div className={`message-body${msg.streaming ? " streaming" : ""}`}>
+        {msg.content}
+        {msg.streaming && <span className="stream-caret" aria-hidden="true" />}
+      </div>
+    </div>
+  );
 }
 
 export default function Chat() {
@@ -66,7 +89,6 @@ export default function Chat() {
 
   const paramId = searchParams.get("id");
   const paramWs = searchParams.get("workspace");
-  // Label may arrive via navigation state (e.g. from Projects or Chats pages)
   const stateLabel = location.state?.workspaceLabel ?? null;
 
   const [messages, setMessages] = useState([]);
@@ -87,8 +109,14 @@ export default function Chat() {
   const [error, setError] = useState(null);
   const [noBackend, setNoBackend] = useState(false);
   const [noFavorites, setNoFavorites] = useState(false);
+
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
+  // Keep a ref to the current chat id so streaming callbacks always see latest value
+  const chatIdRef = useRef(chatId);
+  useEffect(() => { chatIdRef.current = chatId; }, [chatId]);
+  // Abort controller for the active stream
+  const streamControllerRef = useRef(null);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -143,17 +171,13 @@ export default function Chat() {
       }
     })();
 
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
 
   // When navigated to with ?id= and ?workspace=, load the existing transcript
   useEffect(() => {
     if (!getBackendUrl()) return;
     if (!paramId || !paramWs) return;
-
-    // If this is the same chat already loaded, don't reload
     if (paramId === chatId && paramWs === chatWorkspace && messages.length > 0) return;
 
     let cancelled = false;
@@ -169,8 +193,22 @@ export default function Chat() {
           const loaded = (transcript.messages || []).map((m) => ({
             id: crypto.randomUUID(),
             role: m.role,
+            type: "text",
             content: m.text,
           }));
+
+          // If the transcript contains a plan, append it as a plan message
+          if (transcript.plan) {
+            loaded.push({
+              id: crypto.randomUUID(),
+              role: "assistant",
+              type: "plan",
+              plan: transcript.plan,
+              executing: false,
+              executed: transcript.plan.todos?.some((t) => t.status === "completed") ?? false,
+            });
+          }
+
           setMessages(loaded);
           setChatId(transcript.id);
           setChatWorkspace(paramWs);
@@ -188,19 +226,17 @@ export default function Chat() {
       }
     })();
 
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paramId, paramWs]);
 
-  // Create a new chat (possibly targeted at a workspace) when there's no chatId
+  // Create a new chat when there's no chatId
   useEffect(() => {
     if (!getBackendUrl()) {
       setInitializing(false);
       return;
     }
-    if (paramId && paramWs) return; // handled by transcript loader
+    if (paramId && paramWs) return;
     if (chatId) {
       setInitializing(false);
       return;
@@ -216,7 +252,6 @@ export default function Chat() {
         if (!cancelled) {
           saveChatId(id);
           setChatId(id);
-          // If a workspace was specified via param but no id, keep it
           if (paramWs) {
             setChatWorkspace(paramWs);
             saveChatWs(paramWs);
@@ -233,9 +268,7 @@ export default function Chat() {
       }
     })();
 
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatId, paramId, paramWs]);
 
@@ -250,7 +283,6 @@ export default function Chat() {
     persistModel(nextModel);
   };
 
-  // Change workspace from the picker — starts a fresh chat in that workspace
   const handleWorkspaceChange = useCallback(
     async (slug) => {
       const ws = workspaces.find((w) => w.slug === slug) ?? null;
@@ -288,13 +320,13 @@ export default function Chat() {
   );
 
   const handleNewChat = useCallback(async () => {
+    streamControllerRef.current?.abort();
     setError(null);
     setMessages([]);
     setPrompt("");
     setInitializing(true);
     setChatId(null);
     saveChatId(null);
-    // Preserve workspace if one is set
     const wsToKeep = chatWorkspace;
     const labelToKeep = chatWorkspaceLabel;
 
@@ -319,44 +351,186 @@ export default function Chat() {
     }
   }, [chatWorkspace, chatWorkspaceLabel, setSearchParams]);
 
-  const handleSend = useCallback(async () => {
+  /**
+   * Core streaming send. Adds a user message, opens an SSE stream, accumulates
+   * text deltas into a live assistant bubble, then on a plan event inserts a
+   * plan card. On todo events, merges updated statuses into the plan card.
+   */
+  const runStream = useCallback(
+    (text, streamMode, streamChatId, streamWorkspace, planMsgId = null) => {
+      // Add live text bubble for streaming agent output
+      const textMsgId = crypto.randomUUID();
+      setMessages((prev) => [
+        ...prev,
+        { id: textMsgId, role: "assistant", type: "text", content: "", streaming: true },
+      ]);
+
+      setSending(true);
+      setError(null);
+
+      const controller = streamPrompt(
+        {
+          prompt: text,
+          chatId: streamChatId,
+          mode: streamMode,
+          model,
+          workspaceSlug: streamWorkspace || undefined,
+        },
+        {
+          onSession({ chatId: returnedId }) {
+            // The init event contains the canonical chat id (useful when chatId was null)
+            if (returnedId && returnedId !== chatIdRef.current) {
+              saveChatId(returnedId);
+              setChatId(returnedId);
+            }
+          },
+
+          onText({ delta }) {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === textMsgId
+                  ? { ...m, content: m.content + delta }
+                  : m,
+              ),
+            );
+          },
+
+          onPlan(planData) {
+            // Replace the streaming text bubble with the plan card
+            setMessages((prev) => {
+              const withoutText = prev.filter((m) => m.id !== textMsgId);
+              const newPlanMsg = {
+                id: planMsgId ?? crypto.randomUUID(),
+                role: "assistant",
+                type: "plan",
+                plan: {
+                  name: planData.name ?? "",
+                  overview: planData.overview ?? "",
+                  plan: planData.plan ?? "",
+                  todos: (planData.todos ?? []).map((t) => ({
+                    id: t.id ?? crypto.randomUUID(),
+                    content: t.content ?? "",
+                    status: t.status ?? "pending",
+                  })),
+                },
+                executing: false,
+                executed: false,
+              };
+              return [...withoutText, newPlanMsg];
+            });
+          },
+
+          onTodos({ todos: updatedTodos }) {
+            // Merge todo statuses into the most recent plan card
+            setMessages((prev) => {
+              const statusMap = new Map(updatedTodos.map((t) => [t.id, t.status]));
+              return prev.map((m) => {
+                if (m.type !== "plan") return m;
+                return {
+                  ...m,
+                  plan: {
+                    ...m.plan,
+                    todos: m.plan.todos.map((t) => ({
+                      ...t,
+                      status: statusMap.has(t.id) ? statusMap.get(t.id) : t.status,
+                    })),
+                  },
+                };
+              });
+            });
+          },
+
+          onDone() {
+            // Remove streaming state from live text bubble (if still present)
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === textMsgId ? { ...m, streaming: false } : m,
+              ),
+            );
+            // Mark plan as executed-done if this was an agent execute run
+            if (planMsgId) {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === planMsgId && m.type === "plan"
+                    ? { ...m, executing: false, executed: true }
+                    : m,
+                ),
+              );
+            }
+            setSending(false);
+            textareaRef.current?.focus();
+          },
+
+          onError(err) {
+            // Remove empty streaming bubble if nothing was written
+            setMessages((prev) => {
+              const msg = prev.find((m) => m.id === textMsgId);
+              if (msg && !msg.content) {
+                return prev.filter((m) => m.id !== textMsgId);
+              }
+              return prev.map((m) =>
+                m.id === textMsgId ? { ...m, streaming: false } : m,
+              );
+            });
+            if (planMsgId) {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === planMsgId && m.type === "plan"
+                    ? { ...m, executing: false }
+                    : m,
+                ),
+              );
+            }
+            setError(err.message || "Stream error");
+            setSending(false);
+            textareaRef.current?.focus();
+          },
+        },
+      );
+
+      streamControllerRef.current = controller;
+    },
+    [model],
+  );
+
+  const handleSend = useCallback(() => {
     const text = prompt.trim();
     if (!text || sending || initializing || loadingTranscript || !chatId) return;
 
     setPrompt("");
-    setError(null);
-    setSending(true);
-
-    const userMessage = { id: crypto.randomUUID(), role: "user", content: text };
+    const userMessage = { id: crypto.randomUUID(), role: "user", type: "text", content: text };
     setMessages((prev) => [...prev, userMessage]);
 
-    try {
-      const result = await sendPrompt({
-        prompt: text,
-        chatId,
-        mode,
-        model,
-        // Send workspaceSlug so the backend can resolve slug → real path
-        workspaceSlug: chatWorkspace || undefined,
-      });
-      if (!result.ok) {
-        throw new Error(result.stderr || result.error || "Agent request failed");
-      }
+    runStream(text, mode, chatId, chatWorkspace);
+  }, [prompt, sending, initializing, loadingTranscript, chatId, mode, chatWorkspace, runStream]);
 
-      const assistantMessage = {
+  /** Called when the user taps "Execute Plan" inside a PlanView */
+  const handleExecutePlan = useCallback(
+    (planMsgId) => {
+      if (sending) return;
+
+      // Mark the plan card as executing
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === planMsgId && m.type === "plan" ? { ...m, executing: true } : m,
+        ),
+      );
+
+      const executePrompt =
+        "Execute the approved plan. Implement every todo step in order and report progress as you go.";
+
+      const userMessage = {
         id: crypto.randomUUID(),
-        role: "assistant",
-        content: extractResponseText(result),
+        role: "user",
+        type: "text",
+        content: executePrompt,
       };
-      setMessages((prev) => [...prev, assistantMessage]);
-    } catch (err) {
-      setError(err.message || "Failed to send prompt");
-      setPrompt(text);
-    } finally {
-      setSending(false);
-      textareaRef.current?.focus();
-    }
-  }, [prompt, sending, initializing, loadingTranscript, chatId, mode, model, chatWorkspace]);
+      setMessages((prev) => [...prev, userMessage]);
+
+      runStream(executePrompt, "agent", chatIdRef.current, chatWorkspace, planMsgId);
+    },
+    [sending, chatWorkspace, runStream],
+  );
 
   const handleKeyDown = (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -373,7 +547,7 @@ export default function Chat() {
   let subtitle;
   if (loadingTranscript) subtitle = "Loading transcript…";
   else if (initializing) subtitle = "Starting session…";
-  else if (sending) subtitle = `${modeLabel} · working…`;
+  else if (sending) subtitle = `${modeLabel} · streaming…`;
   else if (chatId) subtitle = isResuming ? `${modeLabel} · resumed` : `${modeLabel} · ready`;
   else subtitle = "Offline";
 
@@ -501,21 +675,8 @@ export default function Chat() {
         )}
 
         {messages.map((msg) => (
-          <div key={msg.id} className={`message message-${msg.role}`}>
-            <span className="message-label">{msg.role === "user" ? "You" : "Agent"}</span>
-            <div className="message-body">{msg.content}</div>
-          </div>
+          <MessageBubble key={msg.id} msg={msg} onExecutePlan={handleExecutePlan} />
         ))}
-
-        {sending && (
-          <div className="message message-assistant">
-            <span className="message-label">Agent</span>
-            <div className="message-body thinking">
-              <span className="dot-pulse" aria-hidden="true" />
-              {modeLabel} mode — this can take a few minutes…
-            </div>
-          </div>
-        )}
 
         <div ref={messagesEndRef} />
       </div>

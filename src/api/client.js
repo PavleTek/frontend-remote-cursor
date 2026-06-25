@@ -94,6 +94,100 @@ export async function sendPrompt(payload) {
   });
 }
 
+/**
+ * Stream a prompt via SSE (POST /api/prompt/stream).
+ * handlers: { onSession, onText, onPlan, onTodos, onDone, onError }
+ * Returns an AbortController — call .abort() to cancel.
+ */
+export function streamPrompt(payload, handlers = {}) {
+  const baseUrl = getBackendUrl();
+  if (!baseUrl) {
+    handlers.onError?.(new Error("Backend URL is not configured"));
+    return { abort: () => {} };
+  }
+
+  const controller = new AbortController();
+  const url = `${baseUrl}/api/prompt/stream`;
+
+  (async () => {
+    let response;
+    try {
+      response = await fetch(url, {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          "Content-Type": "application/json",
+          "ngrok-skip-browser-warning": "true",
+        },
+        body: JSON.stringify(payload),
+      });
+    } catch (err) {
+      if (err.name !== "AbortError") {
+        handlers.onError?.(new Error("Could not reach backend. Check the ngrok URL is current and the backend is running."));
+      }
+      return;
+    }
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => null);
+      handlers.onError?.(new Error(body?.error || `Request failed (${response.status})`));
+      return;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        // SSE frames are separated by double newlines
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop(); // keep any incomplete frame
+
+        for (const frame of frames) {
+          if (!frame.trim()) continue;
+          let eventName = "message";
+          let dataStr = "";
+
+          for (const line of frame.split("\n")) {
+            if (line.startsWith("event:")) {
+              eventName = line.slice(6).trim();
+            } else if (line.startsWith("data:")) {
+              dataStr = line.slice(5).trim();
+            }
+          }
+
+          let parsed;
+          try {
+            parsed = JSON.parse(dataStr);
+          } catch {
+            continue;
+          }
+
+          switch (eventName) {
+            case "session": handlers.onSession?.(parsed); break;
+            case "text":    handlers.onText?.(parsed); break;
+            case "plan":    handlers.onPlan?.(parsed); break;
+            case "todos":   handlers.onTodos?.(parsed); break;
+            case "done":    handlers.onDone?.(parsed); break;
+            case "error":   handlers.onError?.(new Error(parsed.error ?? "Stream error")); break;
+          }
+        }
+      }
+    } catch (err) {
+      if (err.name !== "AbortError") {
+        handlers.onError?.(err);
+      }
+    }
+  })();
+
+  return controller;
+}
+
 export async function getWorkspaces() {
   return apiRequest("/api/workspaces");
 }
