@@ -449,12 +449,16 @@ export default function Chat() {
           },
 
           onText({ delta }) {
+            if (!delta) return;
             setMessages((prev) =>
-              prev.map((m) =>
-                m.id === textMsgId
-                  ? { ...m, content: m.content + delta }
-                  : m,
-              ),
+              prev.map((m) => {
+                if (m.id !== textMsgId) return m;
+                // Accept true deltas or cumulative snapshots from the backend
+                const content = delta.startsWith(m.content)
+                  ? delta
+                  : m.content + delta;
+                return { ...m, content };
+              }),
             );
           },
 
