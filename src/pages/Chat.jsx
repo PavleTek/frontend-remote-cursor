@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
-  createChat,
   getBackendUrl,
   getChat,
   getFavoriteModels,
@@ -239,7 +238,6 @@ export default function Chat() {
   const [model, setModel] = useState(getModel);
   const [models, setModels] = useState([]);
   const [loadingModels, setLoadingModels] = useState(true);
-  const [initializing, setInitializing] = useState(true);
   const [loadingTranscript, setLoadingTranscript] = useState(false);
   const [sending, setSending] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -252,10 +250,11 @@ export default function Chat() {
 
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
-  // Keep a ref to the current chat id so streaming callbacks always see latest value
+  // ACP session id for the active agent stream (set from onSession, not create-chat)
+  const acpSessionIdRef = useRef(null);
+  // Keep refs in sync for callbacks
   const chatIdRef = useRef(chatId);
   useEffect(() => { chatIdRef.current = chatId; }, [chatId]);
-  // Abort controller for the active stream
   const streamControllerRef = useRef(null);
   // ACP turn id for the currently active stream (used to address reply endpoints)
   const turnIdRef = useRef(null);
@@ -304,6 +303,7 @@ export default function Chat() {
 
   useEffect(() => {
     if (location.state?.forceNew) {
+      acpSessionIdRef.current = null;
       window.history.replaceState({ ...location.state, forceNew: undefined }, document.title);
     }
   }, [location]);
@@ -375,7 +375,6 @@ export default function Chat() {
 
     let cancelled = false;
     setLoadingTranscript(true);
-    setInitializing(false);
     setMessages([]);
 
     (async () => {
@@ -422,48 +421,6 @@ export default function Chat() {
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paramId, paramWs]);
-
-  // Create a new chat when there's no chatId
-  useEffect(() => {
-    if (!getBackendUrl()) {
-      setInitializing(false);
-      return;
-    }
-    if (paramId && paramWs) return;
-    if (chatId) {
-      setInitializing(false);
-      return;
-    }
-
-    let cancelled = false;
-
-    (async () => {
-      try {
-        const result = await createChat();
-        const id = result.data?.chatId;
-        if (!id) throw new Error("Could not create chat session");
-        if (!cancelled) {
-          saveChatId(id);
-          setChatId(id);
-          if (paramWs) {
-            setChatWorkspace(paramWs);
-            saveChatWs(paramWs);
-            if (stateLabel) {
-              setChatWorkspaceLabel(stateLabel);
-              saveChatWsLabel(stateLabel);
-            }
-          }
-        }
-      } catch (err) {
-        if (!cancelled) setError(err.message || "Failed to start chat");
-      } finally {
-        if (!cancelled) setInitializing(false);
-      }
-    })();
-
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatId, paramId, paramWs]);
 
   const handleModeChange = (nextMode) => {
     setMode(nextMode);
@@ -545,7 +502,7 @@ export default function Chat() {
    * plan card. On todo events, merges updated statuses into the plan card.
    */
   const runStream = useCallback(
-    (text, streamMode, streamChatId, streamWorkspace, planMsgId = null) => {
+    (text, streamMode, streamWorkspace, planMsgId = null) => {
       // Reset ACP turn tracking for this new stream
       turnIdRef.current = null;
       executingPlanMsgIdRef.current = null;
@@ -564,7 +521,7 @@ export default function Chat() {
       const controller = streamPrompt(
         {
           prompt: text,
-          chatId: streamChatId,
+          chatId: acpSessionIdRef.current || undefined,
           mode: streamMode,
           model,
           workspaceSlug: streamWorkspace || undefined,
@@ -575,10 +532,12 @@ export default function Chat() {
           },
 
           onSession({ chatId: returnedId }) {
-            // The init event contains the canonical chat id (useful when chatId was null)
-            if (returnedId && returnedId !== chatIdRef.current) {
-              saveChatId(returnedId);
-              setChatId(returnedId);
+            if (returnedId) {
+              acpSessionIdRef.current = returnedId;
+              if (returnedId !== chatIdRef.current) {
+                saveChatId(returnedId);
+                setChatId(returnedId);
+              }
             }
           },
 
@@ -740,14 +699,14 @@ export default function Chat() {
 
   const handleSend = useCallback(() => {
     const text = prompt.trim();
-    if (!text || sending || initializing || loadingTranscript || !chatId) return;
+    if (!text || sending || loadingTranscript || noBackend || noFavorites) return;
 
     setPrompt("");
     const userMessage = { id: crypto.randomUUID(), role: "user", type: "text", content: text };
     setMessages((prev) => [...prev, userMessage]);
 
-    runStream(text, mode, chatId, chatWorkspace);
-  }, [prompt, sending, initializing, loadingTranscript, chatId, mode, chatWorkspace, runStream]);
+    runStream(text, mode, chatWorkspace);
+  }, [prompt, sending, loadingTranscript, noBackend, noFavorites, mode, chatWorkspace, runStream]);
 
   /** Called when the user taps "Execute Plan" inside a PlanView */
   const handleExecutePlan = useCallback(
@@ -796,7 +755,7 @@ export default function Chat() {
           content: executePrompt,
         };
         setMessages((prev) => [...prev, userMessage]);
-        runStream(executePrompt, "agent", chatIdRef.current, chatWorkspace, planMsgId);
+        runStream(executePrompt, "agent", chatWorkspace, planMsgId);
       }
     },
     [sending, messages, chatWorkspace, runStream],
@@ -845,7 +804,7 @@ export default function Chat() {
 
   const modeLabel = MODES.find((m) => m.id === mode)?.label ?? "Agent";
   const isResuming = Boolean(paramId && paramWs);
-  const busy = sending || initializing || loadingTranscript || refreshing;
+  const busy = sending || loadingTranscript || refreshing;
   const displayLabel = formatWorkspaceDisplay(chatWorkspaceLabel, chatWorkspace);
   const fullWorkspaceTitle = chatWorkspaceLabel || chatWorkspace || "";
   const canRefresh = Boolean(chatIdRef.current && chatWorkspace && !busy && !noBackend);
@@ -1027,7 +986,7 @@ export default function Chat() {
           placeholder={`Message (${modeLabel.toLowerCase()} mode)…`}
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
-          disabled={busy || noBackend || !chatId || noFavorites}
+          disabled={busy || noBackend || noFavorites}
         />
         <button
           type="button"
@@ -1037,11 +996,10 @@ export default function Chat() {
             !prompt.trim() ||
             busy ||
             noBackend ||
-            !chatId ||
             noFavorites
           }
           aria-label={busy ? "Agent working" : "Send prompt"}
-          style={{ cursor: busy || !prompt.trim() || noBackend || !chatId || noFavorites ? "default" : "pointer" }}
+          style={{ cursor: busy || !prompt.trim() || noBackend || noFavorites ? "default" : "pointer" }}
         >
           {busy ? (
             <span className="dot-pulse" aria-hidden="true" />
